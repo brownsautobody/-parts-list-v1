@@ -82,6 +82,16 @@ def document_info(fmt, header, page1_text, all_text):
     return doc
 
 
+def _history_check(h):
+    """Add a sum check to the printed history; nothing is estimated or filled in."""
+    if not h:
+        return None
+    parts = round(sum(e["amount"] for e in h["entries"]), 2)
+    h["sum"] = parts
+    h["ok"] = bool(h["total"]) and abs(parts - h["total"]["amount"]) <= 0.02
+    return h
+
+
 def version_key(doc):
     """Sort key: the highest value is the job's current document."""
     return (doc["supplement_no"], STAGE_RANK[doc["stage"]], doc["printed_at"] or "")
@@ -141,21 +151,19 @@ def parse_pdf(src, filename=""):
         totals = mod.parse_totals(pages)
         charges = [c for i in items for c in mod.expand(i)]
         n_pages = len(pages)
+        history = mod.parse_history(pages)
         document = document_info(fmt, header, page_text(pages[0]), chr(10).join(page_text(p) for p in pages))
     finally:
         pdf.close()
 
     rates = {t["label"]: t["rate"] for t in totals if t.get("rate")}
-    if "Body Labor" in rates:  # labor types without their own totals row bill at the body rate
-        for cat in LABOR_CATEGORIES:
-            rates.setdefault(cat, rates["Body Labor"])
     for c in charges:
         if c["hours"] is not None and c.get("rate") is None:
             c["rate"] = rates.get(c["category"])
             if c["rate"] is not None:
                 c["amount"] = round(c["hours"] * c["rate"], 2)
     result = {
-        "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document,
+        "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document, "history": _history_check(history),
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
     }
     result["summary"] = summarize(result)
@@ -183,8 +191,9 @@ def summarize(r):
     for name, cats in groups.items():
         rows = [c for c in charges if c["category"] in cats and c["hours"] is not None]
         hrs = round(sum(c["hours"] for c in rows), 2)
-        amt = round(sum(c["amount"] for c in rows if c["amount"] is not None), 2)
         rate = next((c["rate"] for c in rows if c.get("rate")), None) or next((rates[c] for c in cats if c in rates), None)
+        # only price hours when the estimate prints a rate for that labor type
+        amt = round(sum(c["amount"] for c in rows if c["amount"] is not None), 2) if rate else None
         labor.append({"category": f"{name} labor", "hours": hrs, "rate": rate, "amount": amt})
 
     by = {t["label"]: t["amount"] for t in totals}
@@ -212,6 +221,7 @@ def summarize(r):
 
     return {
         "document": r["document"],
+        "history": r["history"],
         "customer": h.get("customer", ""),
         "ro_number": ro if ro.isdigit() and len(ro) == 4 else "",
         "vehicle": " ".join(x for x in (v.get("year"), v.get("make"), v.get("model")) if x),
@@ -220,7 +230,7 @@ def summarize(r):
         "claim": h.get("claim", ""),
         "labor": labor,
         "total_labor_hours": round(sum(x["hours"] for x in labor), 2),
-        "total_labor_amount": round(sum(x["amount"] for x in labor), 2),
+        "total_labor_amount": round(sum(t["amount"] for t in totals if t["hours"] is not None and t["rate"] and t["label"].endswith("Labor")), 2) or None,
         "parts_total": parts,
         "other_charges": dedup,
         "checks_ok": all(c["ok"] for c in r["checks"]) if r["checks"] else None,

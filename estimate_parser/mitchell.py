@@ -265,3 +265,30 @@ def parse_header(pages):
         "vin": vin.group(1) if vin else "", "mileage": om.group(1) if om else "",
     }
     return h
+
+
+# ---------------------------------------------------------------- history
+
+def _dollars(neg1, neg2, digits):
+    v = float(digits.replace(",", ""))
+    return -v if (neg1 or neg2) else v
+
+
+def parse_history(pages):
+    """Original net total and each supplement's amount, exactly as printed on the totals page."""
+    lines = [l.strip() for p in pages for l in page_text(p).splitlines()]
+    total = original = None
+    entries = []
+    for l in lines:
+        m = re.match(r"^Net Estimate Total\s+(-?)\$(-?)([\d,]+\.\d\d)$", l)
+        if m and total is None:
+            total = {"label": "Net Estimate Total", "amount": _dollars(m[1], m[2], m[3])}
+        m = re.match(r"^Less Original Net Total\s+(-?)\$(-?)([\d,]+\.\d\d)$", l)
+        if m and original is None:
+            original = {"label": "Original estimate (Less Original Net Total)", "by": "", "amount": _dollars(m[1], m[2], m[3])}
+        m = re.match(r"^(S\d+): (.+?)\s+(-?)\$(-?)([\d,]+\.\d\d)$", l)
+        if m and not any(e["label"] == f"Supplement {m[1]}" for e in entries):
+            entries.append({"label": f"Supplement {m[1]}", "by": m[2], "amount": _dollars(m[3], m[4], m[5])})
+    if not original:
+        return None
+    return {"entries": [original] + entries, "total": total}

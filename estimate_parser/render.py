@@ -67,7 +67,9 @@ def results(r):
         f"<td class='n'>{_n(x['rate'], 2, '$')}</td><td class='n'>{_n(x['amount'], 2, '$')}</td></tr>" for x in m["labor"])
     lrows += (f"<tr><th>Total labor</th><th class='n'>{_n(m['total_labor_hours'], 1)}</th><th></th>"
               f"<th class='n'>{_n(m['total_labor_amount'], 2, '$')}</th></tr>")
-    labor = ("<h2>Labor</h2><div class='wrap'><table><thead><tr><th>Type</th><th class='n'>Hours</th>"
+    labor = ("<h2>Labor</h2><p class='sub'>Rate and amount are shown only where the estimate prints a rate for that labor type; "
+             "total labor is the estimate's own printed labor total.</p>"
+             "<div class='wrap'><table><thead><tr><th>Type</th><th class='n'>Hours</th>"
              f"<th class='n'>Rate</th><th class='n'>Amount</th></tr></thead><tbody>{lrows}</tbody></table></div>")
 
     parts = ("<h2>Parts</h2><div class='wrap'><table><tbody><tr><td>Total parts</td>"
@@ -82,11 +84,26 @@ def results(r):
         "<p class='ok'>&#10003; Labor hours and totals match the estimate.</p>" if ok
         else "<p class='bad'>&#10007; Some extracted numbers do not match the estimate's totals. Check the PDF.</p>")
 
+    hist = m["history"]
+    if hist:
+        hrows = "".join(f"<tr><td>{escape(e['label'])}</td><td>{escape(e['by'])}</td><td class='n'>{_n(e['amount'], 2, '$')}</td></tr>"
+                        for e in hist["entries"])
+        tot = hist["total"]
+        if tot:
+            good = "ok" if hist["ok"] else "bad"
+            hrows += (f"<tr><th>{escape(tot['label'])} (printed)</th><th></th><th class='n'>{_n(tot['amount'], 2, '$')}</th></tr>"
+                      f"<tr><td colspan='2' class='{good}'>{'&#10003; Original + supplements add up to the printed total' if hist['ok'] else '&#10007; Original + supplements do not add up to the printed total'}"
+                      f" ({_n(hist['sum'], 2, '$')})</td><td></td></tr>")
+        history = ("<h2>Job history (as printed on this document)</h2><div class='wrap'><table><thead><tr><th>Document</th>"
+                   f"<th>By</th><th class='n'>Amount</th></tr></thead><tbody>{hrows}</tbody></table></div>")
+    else:
+        history = ("<h2>Job history</h2><p class='sub'>This document does not print the original estimate or earlier "
+                   "supplement totals.</p>")
     d = m["document"]
     printed = d["printed_at"].replace("T", " ")[:16] if d["printed_at"] else "unknown"
     delta = f" &middot; this supplement {_n(d['supplement_amount'], 2, '$')}" if d["supplement_amount"] is not None else ""
     body = (f"<p><a href='/'>&larr; Parse another</a></p><h1>{escape(r['filename'] or 'Estimate')}</h1>"
             f"<p class='sub'><b>{escape(d['label'])}</b> &middot; printed {escape(printed)}{delta} &middot; "
             f"{escape(r['format'])} format &middot; {r['pages']} pages read</p>{note}"
-            f"<div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}")
+            f"<div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}{history}")
     return page(body, f"Parsed: {r['filename'] or 'estimate'}")

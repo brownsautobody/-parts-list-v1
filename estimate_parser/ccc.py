@@ -307,3 +307,25 @@ def parse_header(pages):
     m = re.search(r"Mileage In:\s*([\d,]+)", text)
     h["vehicle"]["mileage"] = m.group(1) if m else ""
     return h
+
+
+# ---------------------------------------------------------------- history
+
+def parse_history(pages):
+    """'CUMULATIVE EFFECTS OF SUPPLEMENT(S)' block, exactly as printed (only on 'with Summary' documents)."""
+    lines = [l.strip() for p in pages for l in page_text(p).splitlines()]
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("CUMULATIVE EFFECTS"))
+    except StopIteration:
+        return None
+    entries, total = [], None
+    for l in lines[start + 1:]:
+        m = re.match(r"^(Estimate|Supplement S\d+)\s+(-?[\d,]+\.\d\d)\s*(.*)$", l)
+        if m:
+            entries.append({"label": m.group(1), "by": m.group(3).strip(), "amount": float(m.group(2).replace(",", ""))})
+            continue
+        m = re.match(r"^(Job Total):\s*\$?\s*(-?[\d,]+\.\d\d)$", l)
+        if m:
+            total = {"label": m.group(1), "amount": float(m.group(2).replace(",", ""))}
+            break
+    return {"entries": entries, "total": total} if entries else None
