@@ -206,6 +206,16 @@ def parse_totals(pages):
                 rows.append({"label": label, "hours": None, "rate": None, "amount": money(m["a"].replace("$", ""))})
             if line.startswith("Net Supplement Amount"):
                 break
+    # Mitchell repeats Taxable / Tax / Non-Taxable inside each block; record which block a row belongs to
+    sec = "labor"
+    for r in rows:
+        if r["label"] == "Taxable Parts":
+            sec = "parts"
+        elif r["label"] in ("Paint Materials", "Shop Materials") and sec == "parts":
+            sec = "costs"
+        elif r["label"] == "Gross Total" and sec == "costs":
+            sec = "gross"
+        r["section"] = sec
     return rows
 
 
@@ -239,7 +249,8 @@ def parse_header(pages):
     m = re.search(r"\b(\d{2}-\d{9}-\d{2})\b", text)
     h["ro_number"] = m.group(1) if m else ""
     m = re.search(r"Quote ID\s*\n?(\d+)", text)
-    o = _band_values(rows, [("owner", "Owner"), ("insured", "Insured"), ("appraiser", "Appraiser")], take=1)
+    third = "Insured" if any(w["text"] == "Insured" for r in rows for w in r["words"]) else "Claimant"
+    o = _band_values(rows, [("owner", "Owner"), ("second", third), ("appraiser", "Appraiser")], take=1)
     h["customer"] = o.get("owner", "")
     h["estimator"] = o.get("appraiser", "")
     ins = _band_values(rows, [("company", "Insurance"), ("claim", "Claim"), ("adjuster", "Adjuster"), ("deductible", "Deductible")], take=2)

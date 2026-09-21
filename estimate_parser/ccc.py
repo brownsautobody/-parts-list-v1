@@ -98,8 +98,8 @@ def _parse_item(row, cols, line_no, section):
             item["labor"] = "Incl."
         elif t in ("T", "X"):
             item["taxed"] = t == "T"
-        elif len(t) == 1 and t.lower() in LABOR_TYPES and w["x1"] < cols["labor_x1"] - 8:
-            item["labor_type"] = LABOR_TYPES[t.lower()]
+        elif t in ("m", "s") and w["x1"] < cols["labor_x1"] - 8:
+            pass  # lowercase after the price = MOTOR mechanical/structural *part* flag, not the labor type
         elif w["x0"] > cols["price_x1"] - 2 and w["x1"] < cols["labor_x1"] - 22:
             item["part_type"] = (item["part_type"] + " " + t).strip()
         elif w["x0"] >= cols["labor_x1"] - 2 and w["x1"] < cols["paint_x1"] - 15:
@@ -246,10 +246,11 @@ def _band_values(rows, label_words, take=2):
             out = {}
             for j, l in enumerate(label_words):
                 hi = xs[j + 1] - 2 if j + 1 < len(xs) else 9999
+                same = [w["text"] for w in r["words"] if toks[l]["x1"] <= w["x0"] < hi and not w["text"].endswith(":")]
                 vals = []
                 for rr in rows[i + 1:i + 1 + take]:
                     vals += [w["text"] for w in rr["words"] if xs[j] - 2 <= w["x0"] < hi]
-                out[l] = " ".join(vals)
+                out[l] = " ".join(same) if same else " ".join(v for v in vals if not v.endswith(":"))
             return out
     return {}
 
@@ -267,9 +268,8 @@ def parse_header(pages):
     if vals:
         h["customer"] = vals["Customer:"]
         h["insurance"] = vals["Insurance:"]
-        h["adjuster"] = "" if vals["Adjuster:"].endswith(":") else vals["Adjuster:"]
-        m = re.search(r"Estimator:\s*([A-Za-z .]+?)\s*$", " ".join(r["text"] for r in rows if "Estimator:" in r["text"]))
-        h["estimator"] = m.group(1) if m else ""
+        h["adjuster"] = vals["Adjuster:"]
+        h["estimator"] = re.sub(r"\s*Create Date:.*$", "", vals["Estimator:"]).strip()
         m = re.search(r"Claim:[ 	]*(\S+)", text)
         h["claim"] = m.group(1) if m else ""
         m = re.search(r"Deductible:[ 	]*([\d,.]+)", text)
@@ -287,8 +287,8 @@ def parse_header(pages):
         m = re.search(r"Claim #:\s*(\S+)", text)
         h["claim"] = m.group(1) if m else ""
         m = re.search(r"Insurance Company:\s*\n?.*?\n(.*)", text)
-        ins = re.search(r"([A-Z][A-Z ]+INSURANCE COMPANY)", text)
-        h["insurance"] = ins.group(1).title() if ins else ""
+        cols = _band_values(rows, ["Owner:", "Inspection", "Insurance"], take=1)
+        h["insurance"] = cols.get("Insurance", "").title()
         m = re.search(r"Date of Loss:\s*(\S+)", text)
         h["loss_date"] = m.group(1) if m else ""
         phones = re.findall(r"\(\d{3}\) \d{3}-\d{4}", text)

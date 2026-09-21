@@ -146,6 +146,8 @@ def _checks(fmt, charges, totals, subtotals):
     else:
         exp = None
         tp = by_label.get("Taxable Parts", {}).get("amount")
+        if tp is not None:  # non-taxable parts (e.g. sublet, labor-only items) are printed in their own row
+            tp += next((t["amount"] for t in totals if t["label"] == "Non-Taxable" and t.get("section") == "parts"), 0)
         cost = sum(t["amount"] for t in totals if t["label"] in ("Paint Materials", "Shop Materials", "Other Additional"))
         if tp is not None:
             exp = round(tp + cost, 2)
@@ -186,6 +188,10 @@ def parse_pdf(src, filename=""):
             c["rate"] = rates.get(c["category"])
             if c["rate"] is not None:
                 c["amount"] = round(c["hours"] * c["rate"], 2)
+    if document["supplement_amount"] is None and history:  # e.g. a $0.00 supplement prints no 'net cost' line
+        cur = next((e for e in history["entries"] if re.search(rf"(?<!\d)0*{document['supplement_no']}$", e["label"]) and "upplement" in e["label"]), None)
+        if cur and document["supplement_no"]:
+            document["supplement_amount"] = cur["amount"]
     n = _supplement_from_history(history)
     if n > document["supplement_no"]:  # the title says 'Estimate' but the document carries supplement amounts
         document["supplement_no"] = n
@@ -225,7 +231,9 @@ def summarize(r):
         labor.append({"category": f"{name} labor", "hours": hrs, "rate": rate, "amount": amt})
 
     by = {t["label"]: t["amount"] for t in totals}
-    parts = by.get("Parts", by.get("Taxable Parts"))
+    parts = by.get("Parts")
+    if parts is None and "Taxable Parts" in by:  # Mitchell: taxable + non-taxable parts, before tax
+        parts = round(by["Taxable Parts"] + next((t["amount"] for t in totals if t["label"] == "Non-Taxable" and t.get("section") == "parts"), 0), 2)
     if parts is None:
         parts = round(sum(c["amount"] for c in charges if c["category"] == "Part"), 2)
 
@@ -235,8 +243,7 @@ def summarize(r):
         lab = t["label"]
         is_tax = lab.split(" ")[0] == "Tax" and r["format"] == "Mitchell"
         if is_tax:  # Mitchell prints tax for labor, parts, materials, then the grand total
-            lab = ["Labor tax", "Parts tax", "Materials tax", "Total tax"][min(tax_n, 3)] + lab[3:]
-            tax_n += 1
+            lab = {"labor": "Labor tax", "parts": "Parts tax", "costs": "Materials tax", "gross": "Total tax"}.get(t.get("section"), lab) + lab[3:]
         if lab in _DROP or lab in LABOR_CATEGORIES or t["hours"] is not None or not t["amount"]:
             continue
         other_rows.append({"label": lab, "amount": t["amount"]})
