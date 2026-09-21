@@ -1,4 +1,7 @@
 """Format detection and the shared output shape for parsed estimates."""
+import re
+from datetime import datetime
+
 from . import ccc, mitchell
 from .pdfutil import open_pages, page_text
 
@@ -14,6 +17,74 @@ def detect_format(pages):
     if "CCC ONE" in text or "Workfile ID" in text or "RO Number" in text:
         return "CCC ONE"
     raise ValueError("Unrecognized estimate format (expected CCC ONE or Mitchell).")
+
+
+STAGE_RANK = {"unknown": 0, "preliminary": 1, "estimate": 2, "to_repair": 3, "of_record": 4}
+STAGE_LABEL = {"unknown": "Unknown", "preliminary": "Preliminary", "estimate": "Estimate", "to_repair": "Estimate to repair",
+               "of_record": "Of record"}
+
+
+def classify_document(title, supplement_hint=None, context=""):
+    """Work out stage + supplement number from a document title (never raises; unknown titles stay 'unknown')."""
+    t = f"{title} {context}".lower()
+    if "prelim" in t:
+        stage = "preliminary"
+    elif "of record" in t:
+        stage = "of_record"
+    elif "to repair" in t:
+        stage = "to_repair"
+    elif "estimate" in t or "supplement" in t:
+        stage = "estimate"
+    else:
+        stage = "unknown"
+    m = re.search(r"supplement(?:\s+of\s+record)?\s*#?\s*(\d+)", title.lower())
+    if m:
+        n = int(m.group(1))
+    elif supplement_hint is not None:
+        n = supplement_hint
+    else:
+        n = 1 if "supplement" in title.lower() else 0
+    label = STAGE_LABEL[stage] + (f" - supplement {n}" if n else "")
+    if stage == "estimate" and n:
+        label = f"Supplement {n}"
+    return {"title_raw": title, "stage": stage, "supplement_no": n, "label": label}
+
+
+def _parse_dt(text, fmts):
+    for f in fmts:
+        try:
+            return datetime.strptime(text, f).isoformat(timespec="seconds")
+        except ValueError:
+            pass
+    return ""
+
+
+def document_info(fmt, header, page1_text, all_text):
+    """Type, version and print time of the document."""
+    if fmt == "Mitchell":
+        pm = re.search(r"Supplement (\d+) Printed (\d{1,2}/\d{1,2}/\d{4} \d\d:\d\d [AP]M)", all_text)
+        tag = re.search(r"\bS(\d+)\b", page1_text)
+        hint = int(pm.group(1)) if pm else int(tag.group(1)) if tag else 0
+        title = f"Supplement {hint}" if hint else "Estimate"
+        doc = classify_document(title, hint, context="of record" if "of record" in page1_text.lower() else "")
+        pt = pm.group(2) if pm else ""
+        if not pt:
+            m = re.search(r"Printed On.*?(\d{1,2}/\d{1,2}/\d{4})", all_text)
+            pt = ""
+        doc["printed_at"] = _parse_dt(pt, ["%m/%d/%Y %I:%M %p"]) if pt else ""
+        m = re.search(r"Net Supplement Amount\s+(-?)\$?(-?[\d,]+\.\d\d)", all_text)
+    else:
+        doc = classify_document(header.get("document", ""))
+        m = re.search(r"(\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d\d:\d\d [AP]M)", all_text)
+        doc["printed_at"] = _parse_dt(m.group(1), ["%m/%d/%Y %I:%M:%S %p"]) if m else ""
+        m = re.search(r"NET COST OF SUPPLEMENT\s+(-?)([\d,]+\.\d\d)", all_text)
+    doc["supplement_amount"] = (-1 if m.group(1) else 1) * float(m.group(2).replace(",", "")) if m else None
+    return doc
+
+
+def version_key(doc):
+    """Sort key: the highest value is the job's current document."""
+    return (doc["supplement_no"], STAGE_RANK[doc["stage"]], doc["printed_at"] or "")
 
 
 def _close(a, b, tol=0.06):
@@ -70,6 +141,7 @@ def parse_pdf(src, filename=""):
         totals = mod.parse_totals(pages)
         charges = [c for i in items for c in mod.expand(i)]
         n_pages = len(pages)
+        document = document_info(fmt, header, page_text(pages[0]), chr(10).join(page_text(p) for p in pages))
     finally:
         pdf.close()
 
@@ -83,7 +155,7 @@ def parse_pdf(src, filename=""):
             if c["rate"] is not None:
                 c["amount"] = round(c["hours"] * c["rate"], 2)
     result = {
-        "filename": filename, "format": fmt, "pages": n_pages, "header": header,
+        "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document,
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
     }
     result["summary"] = summarize(result)
@@ -139,6 +211,7 @@ def summarize(r):
             dedup.append(o)
 
     return {
+        "document": r["document"],
         "customer": h.get("customer", ""),
         "ro_number": ro if ro.isdigit() and len(ro) == 4 else "",
         "vehicle": " ".join(x for x in (v.get("year"), v.get("make"), v.get("model")) if x),

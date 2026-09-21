@@ -82,7 +82,11 @@ def results(r):
         "<p class='ok'>&#10003; Labor hours and totals match the estimate.</p>" if ok
         else "<p class='bad'>&#10007; Some extracted numbers do not match the estimate's totals. Check the PDF.</p>")
 
+    d = m["document"]
+    printed = d["printed_at"].replace("T", " ")[:16] if d["printed_at"] else "unknown"
+    delta = f" &middot; this supplement {_n(d['supplement_amount'], 2, '$')}" if d["supplement_amount"] is not None else ""
     body = (f"<p><a href='/'>&larr; Parse another</a></p><h1>{escape(r['filename'] or 'Estimate')}</h1>"
-            f"<p class='sub'>{escape(r['format'])} format &middot; {r['pages']} pages read</p>{note}"
+            f"<p class='sub'><b>{escape(d['label'])}</b> &middot; printed {escape(printed)}{delta} &middot; "
+            f"{escape(r['format'])} format &middot; {r['pages']} pages read</p>{note}"
             f"<div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}")
     return page(body, f"Parsed: {r['filename'] or 'estimate'}")
