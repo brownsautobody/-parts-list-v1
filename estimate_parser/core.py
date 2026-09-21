@@ -196,6 +196,10 @@ def parse_pdf(src, filename=""):
     if n > document["supplement_no"]:  # the title says 'Estimate' but the document carries supplement amounts
         document["supplement_no"] = n
         document["label"] += f" - includes supplement {n}"
+    display = re.sub(r"\s+with summary$", "", document["title_raw"], flags=re.I).strip() or document["label"]
+    if "includes supplement" in document["label"]:
+        display += " - includes supplement " + str(document["supplement_no"])
+    document["display"] = display
     result = {
         "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document, "history": _history_check(history, totals),
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
@@ -209,6 +213,14 @@ def parse_pdf(src, filename=""):
 _DROP = {"Parts", "Taxable Parts", "Parts Total", "Parts Adjustments", "Taxable", "Non-Taxable", "Pre-Tax Discount",
          "Total Labor", "Labor Total", "Original", "Original Estimate", "Net Supplement", "Less Original Net Total",
          "Net Supplement Amount"}
+
+
+def _short_model(model):
+    """'Silverado LTZ 4 Door Crew Cab...' -> 'Silverado'; '1500 Silverado LTZ...' -> '1500 Silverado'; drops trim/engine/body."""
+    parts = model.split()
+    if not parts:
+        return ""
+    return " ".join(parts[:2]) if parts[0][0].isdigit() and len(parts) > 1 else parts[0]
 
 
 def summarize(r):
@@ -262,7 +274,7 @@ def summarize(r):
         "history": r["history"],
         "customer": h.get("customer", ""),
         "ro_number": ro if ro.isdigit() and len(ro) == 4 else "",
-        "vehicle": " ".join(x for x in (v.get("year"), v.get("make"), v.get("model")) if x),
+        "vehicle": " ".join(x for x in (v.get("year"), v.get("make"), _short_model(v.get("model", ""))) if x),
         "vin": v.get("vin", ""),
         "insurance": h.get("insurance", ""),
         "claim": h.get("claim", ""),
