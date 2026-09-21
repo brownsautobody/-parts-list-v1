@@ -53,8 +53,30 @@ Build production board and parts receiving tools
 Add user permissions and audit logging
 Technical Approach
 Language: Python (for fast iteration)
-PDF parsing: [pdfplumber/PyPDF2]
-Display: HTML table for MVP (can upgrade to web interface later)
+PDF parsing: pdfplumber
+Display: Flask upload page showing HTML tables (upload a PDF, see the itemized result)
 Storage: Git repo, pushing incrementally
 Next step: Once parsing is solid, create database schema to match this data structure
 
+---
+
+## Phase 1 status: built
+
+Supports **CCC ONE** and **Mitchell** estimate/supplement PDFs (all pages read). Each charge is itemized as
+Part, Body / Paint / Mechanical (and Structural, Frame...) Labor, Sublet or Other Charge. Every parse is checked against
+the estimate's own totals (labor hours by type, parts/charges total).
+
+### Run it
+
+```
+pip install -r requirements.txt
+python app.py        # then open http://127.0.0.1:5000 and upload a PDF
+```
+
+Put test PDFs in `samples/` (ignored by git so customer data stays local).
+
+### Layout
+
+- `estimate_parser/ccc.py`, `mitchell.py` - one parser per format (header, line items, totals)
+- `estimate_parser/core.py` - format detection, `parse_pdf()`, validation checks (reusable for the database phase)
+- `estimate_parser/render.py`, `app.py` - HTML output and upload page

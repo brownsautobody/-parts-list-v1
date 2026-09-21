@@ -1,0 +1,5 @@
+# Keep customer estimate PDFs off GitHub
+samples/*
+!samples/.gitkeep
+__pycache__/
+*.pyc
