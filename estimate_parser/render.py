@@ -49,62 +49,40 @@ def page(body, title="Estimate Parser"):
 def upload_form(error=""):
     err = f"<div class='err'>{escape(error)}</div>" if error else ""
     return page(
-        "<h1>Estimate Parser</h1><p class='sub'>Upload a CCC ONE or Mitchell estimate PDF to extract customer, vehicle, "
-        "itemized parts, labor (body / paint / mechanical), other charges and totals.</p>"
+        "<h1>Estimate Parser</h1><p class='sub'>Upload a CCC ONE or Mitchell estimate PDF to pull out the key data: "
+        "customer, RO #, vehicle, VIN, insurance, claim #, labor by type, total parts and other price breakdowns.</p>"
         f"{err}<div class='card'><form class='up' method='post' action='/' enctype='multipart/form-data'>"
         "<input type='file' name='pdf' accept='application/pdf,.pdf' required>"
         "<button class='go' type='submit'>Parse estimate</button></form></div>")
 
 
 def results(r):
-    h, v = r["header"], r["header"]["vehicle"]
-    fields = [
-        ("Customer", h.get("customer")), ("Phone", h.get("phone")), ("RO / Estimate #", h.get("ro_number")),
-        ("Document", h.get("document")), ("Vehicle", f"{v['year']} {v['make']} {v['model']}".strip()),
-        ("VIN", v.get("vin")), ("Mileage", v.get("mileage")), ("Insurance", h.get("insurance")),
-        ("Claim #", h.get("claim")), ("Adjuster", h.get("adjuster")), ("Estimator", h.get("estimator")),
-        ("Deductible", h.get("deductible")), ("Loss date", h.get("loss_date")),
-    ]
-    info = "".join(f"<div><span>{escape(k)}</span>{escape(str(val or '—'))}</div>" for k, val in fields)
+    m = r["summary"]
+    fields = [("Customer", m["customer"]), ("RO #", m["ro_number"]), ("Vehicle", m["vehicle"]), ("VIN", m["vin"]),
+              ("Insurance", m["insurance"]), ("Claim #", m["claim"])]
+    info = "".join(f"<div><span>{escape(k)}</span>{escape(str(val)) or '&nbsp;'}</div>" for k, val in fields)
 
-    checks = "".join(
-        f"<tr><td>{escape(c['name'])}</td><td class='n'>{c['parsed']:,.2f}</td><td class='n'>{c['expected']:,.2f}</td>"
-        f"<td class='{'ok' if c['ok'] else 'bad'}'>{'✓ matches' if c['ok'] else '✗ mismatch'}</td></tr>"
-        for c in r["checks"])
-    checks_html = (
-        "<h2>Validation against the estimate's own totals</h2><div class='wrap'><table><thead><tr><th>Check</th>"
-        "<th class='n'>Extracted</th><th class='n'>Estimate says</th><th></th></tr></thead>"
-        f"<tbody>{checks}</tbody></table></div>") if checks else ""
+    lrows = "".join(
+        f"<tr><td>{escape(x['category'])}</td><td class='n'>{_n(x['hours'], 1)}</td>"
+        f"<td class='n'>{_n(x['rate'], 2, '$')}</td><td class='n'>{_n(x['amount'], 2, '$')}</td></tr>" for x in m["labor"])
+    lrows += (f"<tr><th>Total labor</th><th class='n'>{_n(m['total_labor_hours'], 1)}</th><th></th>"
+              f"<th class='n'>{_n(m['total_labor_amount'], 2, '$')}</th></tr>")
+    labor = ("<h2>Labor</h2><div class='wrap'><table><thead><tr><th>Type</th><th class='n'>Hours</th>"
+             f"<th class='n'>Rate</th><th class='n'>Amount</th></tr></thead><tbody>{lrows}</tbody></table></div>")
 
-    cats = sorted({c["category"] for c in r["charges"]})
-    filters = "<button class='on' data-f='all'>All</button>" + "".join(
-        f"<button data-f='{escape(c)}'>{escape(c)}</button>" for c in cats)
-    rows = []
-    for c in r["charges"]:
-        desc = " ".join(x for x in (c["op"], c["desc"]) if x)
-        rows.append(
-            f"<tr data-c='{escape(c['category'])}'><td class='n'>{c['line']}</td>"
-            f"<td><span class='chip {_kind(c['category'])}'>{escape(c['category'])}</span></td>"
-            f"<td>{escape(desc)}<div class='sec'>{escape(c['section'])}</div></td>"
-            f"<td>{escape(c['part_no'])}</td><td>{escape(c.get('part_type', ''))}</td>"
-            f"<td class='n'>{_n(c.get('qty'), 0)}</td><td class='n'>{_n(c.get('hours'), 1)}</td>"
-            f"<td class='n'>{_n(c.get('rate'), 2, '$')}</td><td class='n'>{_n(c.get('amount'), 2, '$')}</td></tr>")
-    charges = (
-        f"<h2>Itemized charges ({len(r['charges'])})</h2><div class='filters'>{filters}</div>"
-        "<div class='wrap'><table id='charges'><thead><tr>"
-        "<th class='n'>Line</th><th>Type</th><th>Description</th><th>Part #</th><th>Part type</th>"
-        "<th class='n'>Qty</th><th class='n'>Hours</th><th class='n'>Rate</th><th class='n'>Amount</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
+    parts = ("<h2>Parts</h2><div class='wrap'><table><tbody><tr><td>Total parts</td>"
+             f"<td class='n'>{_n(m['parts_total'], 2, '$')}</td></tr></tbody></table></div>")
 
-    trows = "".join(
-        f"<tr><td>{escape(t['label'])}</td><td class='n'>{_n(t.get('hours'), 1)}</td>"
-        f"<td class='n'>{_n(t.get('rate'), 2, '$')}</td><td class='n'>{_n(t['amount'], 2, '$')}</td></tr>"
-        for t in r["totals"])
-    totals = (
-        "<h2>Estimate totals</h2><div class='wrap'><table><thead><tr><th>Category</th><th class='n'>Hours</th>"
-        f"<th class='n'>Rate</th><th class='n'>Amount</th></tr></thead><tbody>{trows}</tbody></table></div>")
+    orows = "".join(f"<tr><td>{escape(o['label'])}</td><td class='n'>{_n(o['amount'], 2, '$')}</td></tr>"
+                    for o in m["other_charges"])
+    other = ("<h2>Other price breakdowns</h2><div class='wrap'><table><tbody>" + orows + "</tbody></table></div>") if orows else ""
 
-    body = (f"<p><a href='/'>← Parse another</a></p><h1>{escape(r['filename'] or 'Estimate')}</h1>"
-            f"<p class='sub'>{escape(r['format'])} format · {r['pages']} pages read</p>"
-            f"<div class='card'><div class='grid'>{info}</div></div>{checks_html}{charges}{totals}")
+    ok = m["checks_ok"]
+    note = "" if ok is None else (
+        "<p class='ok'>&#10003; Labor hours and totals match the estimate.</p>" if ok
+        else "<p class='bad'>&#10007; Some extracted numbers do not match the estimate's totals. Check the PDF.</p>")
+
+    body = (f"<p><a href='/'>&larr; Parse another</a></p><h1>{escape(r['filename'] or 'Estimate')}</h1>"
+            f"<p class='sub'>{escape(r['format'])} format &middot; {r['pages']} pages read</p>{note}"
+            f"<div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}")
     return page(body, f"Parsed: {r['filename'] or 'estimate'}")

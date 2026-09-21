@@ -82,7 +82,73 @@ def parse_pdf(src, filename=""):
             c["rate"] = rates.get(c["category"])
             if c["rate"] is not None:
                 c["amount"] = round(c["hours"] * c["rate"], 2)
-    return {
+    result = {
         "filename": filename, "format": fmt, "pages": n_pages, "header": header,
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
+    }
+    result["summary"] = summarize(result)
+    return result
+
+
+# --------------------------------------------------------------- key-data summary
+
+_DROP = {"Parts", "Taxable Parts", "Parts Total", "Parts Adjustments", "Taxable", "Non-Taxable", "Pre-Tax Discount",
+         "Total Labor", "Labor Total", "Original", "Original Estimate", "Net Supplement", "Less Original Net Total",
+         "Net Supplement Amount"}
+
+
+def summarize(r):
+    """The handful of fields the shop needs from an estimate."""
+    h, v = r["header"], r["header"]["vehicle"]
+    charges, totals = r["charges"], r["totals"]
+    ro = h.get("ro_number", "")
+    rates = {t["label"]: t["rate"] for t in totals if t.get("rate")}
+
+    groups = {"Body": ["Body Labor"], "Paint": ["Paint Labor"], "Mechanical": ["Mechanical Labor"]}
+    other_cats = [c for c in LABOR_CATEGORIES if c not in sum(groups.values(), [])]
+    groups["Other"] = other_cats
+    labor = []
+    for name, cats in groups.items():
+        rows = [c for c in charges if c["category"] in cats and c["hours"] is not None]
+        hrs = round(sum(c["hours"] for c in rows), 2)
+        amt = round(sum(c["amount"] for c in rows if c["amount"] is not None), 2)
+        rate = next((c["rate"] for c in rows if c.get("rate")), None) or next((rates[c] for c in cats if c in rates), None)
+        labor.append({"category": f"{name} labor", "hours": hrs, "rate": rate, "amount": amt})
+
+    by = {t["label"]: t["amount"] for t in totals}
+    parts = by.get("Parts", by.get("Taxable Parts"))
+    if parts is None:
+        parts = round(sum(c["amount"] for c in charges if c["category"] == "Part"), 2)
+
+    labels = {t["label"] for t in totals}
+    other_rows, tax_n = [], 0
+    for t in totals:
+        lab = t["label"]
+        is_tax = lab.split(" ")[0] == "Tax" and r["format"] == "Mitchell"
+        if is_tax:  # Mitchell prints tax for labor, parts, materials, then the grand total
+            lab = ["Labor tax", "Parts tax", "Materials tax", "Total tax"][min(tax_n, 3)] + lab[3:]
+            tax_n += 1
+        if lab in _DROP or lab in LABOR_CATEGORIES or t["hours"] is not None or not t["amount"]:
+            continue
+        other_rows.append({"label": lab, "amount": t["amount"]})
+    seen, dedup = set(), []
+    for o in other_rows:
+        k = (o["label"], o["amount"])
+        if k not in seen:
+            seen.add(k)
+            dedup.append(o)
+
+    return {
+        "customer": h.get("customer", ""),
+        "ro_number": ro if ro.isdigit() and len(ro) == 4 else "",
+        "vehicle": " ".join(x for x in (v.get("year"), v.get("make"), v.get("model")) if x),
+        "vin": v.get("vin", ""),
+        "insurance": h.get("insurance", ""),
+        "claim": h.get("claim", ""),
+        "labor": labor,
+        "total_labor_hours": round(sum(x["hours"] for x in labor), 2),
+        "total_labor_amount": round(sum(x["amount"] for x in labor), 2),
+        "parts_total": parts,
+        "other_charges": dedup,
+        "checks_ok": all(c["ok"] for c in r["checks"]) if r["checks"] else None,
     }
