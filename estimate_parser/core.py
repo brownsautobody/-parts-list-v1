@@ -82,14 +82,23 @@ def document_info(fmt, header, page1_text, all_text):
     return doc
 
 
-def _history_check(h):
-    """Add a sum check to the printed history; nothing is estimated or filled in."""
+def _history_check(h, totals=()):
+    """Add a sum check to the printed history. The printed total is one the PDF itself prints; nothing is estimated."""
     if not h:
         return None
     parts = round(sum(e["amount"] for e in h["entries"]), 2)
     h["sum"] = parts
+    if not h["total"]:
+        printed = [t for t in totals if t["label"] in ("Grand Total", "Net Total") and t["hours"] is None]
+        match = next((t for t in printed if abs(t["amount"] - parts) <= 0.02), None) or (printed[0] if printed else None)
+        h["total"] = {"label": match["label"], "amount": match["amount"]} if match else None
     h["ok"] = bool(h["total"]) and abs(parts - h["total"]["amount"]) <= 0.02
     return h
+
+
+def _supplement_from_history(h):
+    nums = [int(re.search(r"(\d+)$", e["label"]).group(1)) for e in (h or {}).get("entries", []) if "upplement" in e["label"]]
+    return max(nums) if nums else 0
 
 
 def version_key(doc):
@@ -125,6 +134,14 @@ def _checks(fmt, charges, totals, subtotals):
     price_total = round(sum(c["amount"] for c in charges if c["category"] in PRICED and c["amount"] is not None), 2)
     if fmt == "CCC ONE":
         exp = subtotals[0] if subtotals else by_label.get("Parts", {}).get("amount")
+        p = by_label.get("Parts", {})
+        if not subtotals and exp is not None:
+            # printed Parts total = priced lines + markup (or - discount); sublet/misc is printed on its own row
+            if p.get("extra") is not None and p.get("extra_kind") == "markup":
+                exp = round(exp - p["extra"], 2)
+            elif p.get("extra") is not None and p.get("extra_kind") == "discount":
+                exp = round(exp + p["extra"], 2)
+            exp = round(exp + by_label.get("Sublet/Miscellaneous", {}).get("amount", 0), 2)
         name = "Line price total"
     else:
         exp = None
@@ -149,9 +166,16 @@ def parse_pdf(src, filename=""):
         else:
             items, subtotals = mitchell.parse_items(pages), []
         totals = mod.parse_totals(pages)
+        if fmt == "CCC ONE":
+            kinds = ccc.totals_extra_columns(pages)
+            for t in totals:
+                if t.get("extra") is not None:
+                    t["extra_kind"] = kinds.get(t["label"], "")
         charges = [c for i in items for c in mod.expand(i)]
         n_pages = len(pages)
         history = mod.parse_history(pages)
+        if not history and fmt == "CCC ONE":  # different layouts print the history in different places
+            history = ccc.parse_history_version_table(pages) or ccc.parse_history_anywhere(pages)
         document = document_info(fmt, header, page_text(pages[0]), chr(10).join(page_text(p) for p in pages))
     finally:
         pdf.close()
@@ -162,8 +186,12 @@ def parse_pdf(src, filename=""):
             c["rate"] = rates.get(c["category"])
             if c["rate"] is not None:
                 c["amount"] = round(c["hours"] * c["rate"], 2)
+    n = _supplement_from_history(history)
+    if n > document["supplement_no"]:  # the title says 'Estimate' but the document carries supplement amounts
+        document["supplement_no"] = n
+        document["label"] += f" - includes supplement {n}"
     result = {
-        "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document, "history": _history_check(history),
+        "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document, "history": _history_check(history, totals),
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
     }
     result["summary"] = summarize(result)
@@ -212,6 +240,9 @@ def summarize(r):
         if lab in _DROP or lab in LABOR_CATEGORIES or t["hours"] is not None or not t["amount"]:
             continue
         other_rows.append({"label": lab, "amount": t["amount"]})
+    for t in totals:
+        if t.get("extra") is not None and t.get("extra_kind"):
+            other_rows.insert(0, {"label": f"{t['label']} {t['extra_kind']} (included in {t['label'].lower()} total)", "amount": t["extra"]})
     seen, dedup = set(), []
     for o in other_rows:
         k = (o["label"], o["amount"])

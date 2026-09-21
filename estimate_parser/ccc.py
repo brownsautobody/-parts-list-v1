@@ -228,9 +228,10 @@ def parse_totals(pages):
                 lab = m["l"].split(", ")[1].replace("Refinish", "Paint")
                 rows.append({"label": f"{lab} Labor", "hours": float(m["h"]), "rate": float(m["r"].replace(",", "")), "amount": _amt(m["a"])})
                 continue
-            m = re.match(rf"^(?P<l>[A-Za-z][A-Za-z ,.#$:()]*?)\s+(?P<a>{_AMT})$", line)
+            m = re.match(rf"^(?P<l>[A-Za-z][A-Za-z ,./#$:()]*?)\s+(?:(?P<x>{_AMT})\s+)?(?P<a>{_AMT})$", line)
             if m and not m["l"].startswith(("T =", "Page")):
-                rows.append({"label": m["l"].replace("Material, Paint", "Paint Materials").rstrip(" $:"), "hours": None, "rate": None, "amount": _amt(m["a"])})
+                rows.append({"label": m["l"].replace("Material, Paint", "Paint Materials").rstrip(" $:"), "hours": None, "rate": None,
+                             "amount": _amt(m["a"]), "extra": _amt(m["x"]) if m["x"] else None})
     return rows
 
 
@@ -269,15 +270,15 @@ def parse_header(pages):
         h["adjuster"] = "" if vals["Adjuster:"].endswith(":") else vals["Adjuster:"]
         m = re.search(r"Estimator:\s*([A-Za-z .]+?)\s*$", " ".join(r["text"] for r in rows if "Estimator:" in r["text"]))
         h["estimator"] = m.group(1) if m else ""
-        m = re.search(r"Claim:\s*(\S+)", text)
+        m = re.search(r"Claim:[ 	]*(\S+)", text)
         h["claim"] = m.group(1) if m else ""
-        m = re.search(r"Deductible:\s*([\d,.]+)", text)
+        m = re.search(r"Deductible:[ 	]*([\d,.]+)", text)
         h["deductible"] = m.group(1) if m else ""
-        m = re.search(r"Create Date:\s*(\S+)", text)
+        m = re.search(r"Create Date:[ 	]*(\S+)", text)
         h["created"] = m.group(1) if m else ""
         h["phone"] = ""
     else:
-        m = re.search(r"Insured:\s*(.*?)\s+Policy #:", text)
+        m = re.search(r"Insured:[ 	]*(.*?)\s+Policy #:", text)
         h["customer"] = m.group(1).strip() if m else ""
         m = re.search(r"Written By:\s*(.+)", text)
         h["estimator"] = m.group(1).strip() if m else ""
@@ -329,3 +330,55 @@ def parse_history(pages):
             total = {"label": m.group(1), "amount": float(m.group(2).replace(",", ""))}
             break
     return {"entries": entries, "total": total} if entries else None
+
+
+def _hist_amt(s):
+    v = float(re.sub(r"[^\d.]", "", s))
+    return -v if "(" in s or "-" in s else v
+
+
+def parse_history_version_table(pages):
+    """'Estimate Version Total $' table: Original / Supplement S01... rows printed near the totals (negatives in parentheses)."""
+    lines = [l.strip() for p in pages for l in page_text(p).splitlines()]
+    starts = [i for i, l in enumerate(lines) if l.startswith("Estimate Version Total")]
+    entries = []
+    for i in starts[:1]:
+        for l in lines[i + 1:]:
+            if re.match(r"^(Insurance Total|Customer Total|Balance due|Received)", l):
+                break
+            m = re.match(r"^(Original|Estimate|Supplement S?\d+)\s+(\(?-?[\d,]+\.\d\d\)?)\s*(.*)$", l)
+            if m:
+                entries.append({"label": m.group(1), "by": m.group(3).strip(), "amount": _hist_amt(m.group(2))})
+    return {"entries": entries, "total": None} if entries else None
+
+
+def parse_history_anywhere(pages):
+    """Last resort: any 'Original' / 'Supplement Sxx' amount rows anywhere in the document."""
+    entries, seen = [], set()
+    for p in pages:
+        for l in page_text(p).splitlines():
+            m = re.match(r"^(Original|Supplement S?\d+)\s+(\(?-?[\d,]+\.\d\d\)?)\s*(.*)$", l.strip())
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                entries.append({"label": m.group(1), "by": m.group(3).strip(), "amount": _hist_amt(m.group(2))})
+    return {"entries": entries, "total": None} if entries else None
+
+
+def totals_extra_columns(pages):
+    """Which column ('Discount' or 'Markup') an extra amount on a totals row sits under, judged by x position."""
+    kinds = {}
+    for page in pages:
+        rows = group_rows(page)
+        head = next((r for r in rows if {"Discount", "Markup"} <= {w["text"] for w in r["words"]}), None)
+        if not head:
+            continue
+        cols = {w["text"]: w["x1"] for w in head["words"] if w["text"] in ("Discount", "Markup")}
+        for r in rows:
+            if r["top"] <= head["top"]:
+                continue
+            nums = [w for w in r["words"] if re.match(r"^\(?-?[\d,]+\.\d\d\)?$", w["text"])]
+            label = " ".join(w["text"] for w in r["words"] if w["x0"] < (nums[0]["x0"] if nums else 0))
+            if len(nums) == 2 and label:
+                x = nums[0]["x1"]
+                kinds[label.replace("Material, Paint", "Paint Materials")] = min(cols, key=lambda c: abs(cols[c] - x)).lower()
+    return kinds
