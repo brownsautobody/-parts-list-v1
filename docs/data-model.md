@@ -18,6 +18,8 @@ One uploaded PDF = one version of the estimate.
 - `supplement_no` - 0 for the original, N for supplement N
 - `printed_at` - print time from the PDF footer
 - `supplement_amount` - dollar change of this supplement, when the PDF prints it
+- `needs_review` / `review_reasons` - set by `review_flags()` when parsed totals don't match the printed ones, the
+  history doesn't add up, or the document type or print time can't be read
 
 **Current values rule:** the job shows its newest document, chosen by `version_key()` in
 `estimate_parser/core.py`: highest `supplement_no`, then `stage` rank (unknown < preliminary < estimate <

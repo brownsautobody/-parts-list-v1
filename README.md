@@ -64,7 +64,8 @@ Next step: Once parsing is solid, create database schema to match this data stru
 
 Supports **CCC ONE** and **Mitchell** estimate/supplement PDFs (all pages read). Each charge is itemized as
 Part, Body / Paint / Mechanical (and Structural, Frame...) Labor, Sublet or Other Charge. Every parse is checked against
-the estimate's own totals (labor hours by type, parts/charges total).
+the estimate's own totals (labor hours by type, parts/charges total, supplement history). If a check fails or the
+document type / print time can't be read, the page shows a red "Needs review" box listing why.
 
 ### Run it
 

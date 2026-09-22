@@ -20,7 +20,8 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.sec{color:var(--mute);font-size:12px}
 form.up{display:flex;gap:10px;align-items:center;flex-wrap:wrap}input[type=file]{flex:1;min-width:220px}
 button.go{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 18px;font-size:15px;cursor:pointer}
-.err{background:var(--card);border:1px solid var(--bad);color:var(--bad);border-radius:10px;padding:12px 14px;margin:14px 0}
+.err,.review{background:var(--card);border:1px solid var(--bad);color:var(--bad);border-radius:10px;padding:12px 14px;margin:14px 0}
+.review ul{margin:6px 0 0;padding-left:20px}
 """
 
 JS = """
@@ -90,7 +91,12 @@ def results(r):
     else:
         history = ""
 
+    review = ""
+    if m["needs_review"]:
+        items = "".join(f"<li>{escape(x)}</li>" for x in m["review_reasons"])
+        review = f"<div class='review'><strong>Needs review</strong><ul>{items}</ul></div>"
+
     body = (f"<p><a href='/'>&larr; Parse another</a></p><h1>{escape(d['display'])}</h1>"
-            f"<p class='sub'>{escape(r['filename'] or '')}</p>{history}"
+            f"<p class='sub'>{escape(r['filename'] or '')}</p>{review}{history}"
             f"<h2>Job</h2><div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}")
     return page(body, f"Parsed: {d['display']}")
