@@ -81,3 +81,5 @@ Put test PDFs in `samples/` (ignored by git so customer data stays local).
 - `estimate_parser/ccc.py`, `mitchell.py` - one parser per format (header, line items, totals)
 - `estimate_parser/core.py` - format detection, `parse_pdf()`, validation checks (reusable for the database phase)
 - `estimate_parser/render.py`, `app.py` - HTML output and upload page
+- `docs/data-model.md` - database design for the web app (jobs, estimates, production board, customer
+  communication, parts receiving) and the order to build it in
