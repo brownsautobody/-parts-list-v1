@@ -1,4 +1,5 @@
-"""HTML rendering for parsed estimates."""
+"""HTML rendering for parsed estimates and saved jobs."""
+from datetime import datetime
 from html import escape
 
 CSS = """
@@ -22,6 +23,11 @@ form.up{display:flex;gap:10px;align-items:center;flex-wrap:wrap}input[type=file]
 button.go{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 18px;font-size:15px;cursor:pointer}
 .err,.review{background:var(--card);border:1px solid var(--bad);color:var(--bad);border-radius:10px;padding:12px 14px;margin:14px 0}
 .review ul{margin:6px 0 0;padding-left:20px}
+nav{display:flex;gap:18px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--card)}
+nav b{margin-right:auto}nav a{color:var(--accent);text-decoration:none}a{color:var(--accent)}
+.flag{background:var(--bad);color:#fff}.note{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 14px}
+form.ro{display:flex;gap:8px;align-items:center}form.ro input{width:90px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+button.small{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:5px 12px;cursor:pointer}
 """
 
 JS = """
@@ -40,24 +46,75 @@ def _n(v, d=2, prefix=""):
     return "" if v is None else f"{prefix}{v:,.{d}f}"
 
 
-def page(body, title="Estimate Parser"):
+NAV = "<nav><b>Shop Database</b><a href='/'>Upload estimate</a><a href='/jobs'>Jobs</a></nav>"
+
+
+def page(body, title="Shop Database"):
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<title>{escape(title)}</title><style>{CSS}</style></head>"
-            f"<body><main>{body}</main><script>{JS}</script></body></html>")
+            f"<body>{NAV}<main>{body}</main><script>{JS}</script></body></html>")
 
 
 def upload_form(error=""):
     err = f"<div class='err'>{escape(error)}</div>" if error else ""
     return page(
-        "<h1>Estimate Parser</h1><p class='sub'>Upload a CCC ONE or Mitchell estimate PDF to pull out the key data: "
-        "customer, RO #, vehicle, VIN, insurance, claim #, labor by type, total parts and other price breakdowns.</p>"
+        "<h1>Upload estimate</h1><p class='sub'>Upload a CCC ONE or Mitchell estimate or supplement PDF. It is read and saved "
+        "to its job (matched by RO #, then claim #, then VIN); a supplement becomes a new version of the same job.</p>"
         f"{err}<div class='card'><form class='up' method='post' action='/' enctype='multipart/form-data'>"
         "<input type='file' name='pdf' accept='application/pdf,.pdf' required>"
-        "<button class='go' type='submit'>Parse estimate</button></form></div>")
+        "<button class='go' type='submit'>Save estimate</button></form></div>")
 
 
-def results(r):
+def _dt(v):
+    """ISO text or datetime -> '9/17/2026 1:20 PM'."""
+    if not v:
+        return ""
+    d = v if isinstance(v, datetime) else datetime.fromisoformat(v)
+    if d.tzinfo:
+        d = d.astimezone()
+    return f"{d.month}/{d.day}/{d.year} {d.strftime('%I:%M %p').lstrip('0')}"
+
+
+def jobs_list(jobs):
+    """jobs: dicts with id, ro, customer, vehicle, insurance, claim, current, needs_review, versions, updated."""
+    rows = "".join(
+        f"<tr><td><a href='/jobs/{j['id']}'>{escape(j['ro']) or '&mdash;'}</a></td><td>{escape(j['customer'])}</td>"
+        f"<td>{escape(j['vehicle'])}</td><td>{escape(j['insurance'])}</td><td>{escape(j['claim'])}</td>"
+        f"<td>{escape(j['current'])}{' <span class=\"chip flag\">Needs review</span>' if j['needs_review'] else ''}</td>"
+        f"<td class='n'>{j['versions']}</td><td class='n'>{_dt(j['updated'])}</td></tr>" for j in jobs)
+    table = ("<div class='wrap'><table><thead><tr><th>RO #</th><th>Customer</th><th>Vehicle</th><th>Insurance</th>"
+             "<th>Claim #</th><th>Current estimate</th><th class='n'>Versions</th><th class='n'>Updated</th></tr></thead>"
+             f"<tbody>{rows}</tbody></table></div>") if jobs else "<p class='sub'>No jobs yet - upload an estimate.</p>"
+    return page(f"<h1>Jobs</h1><p class='sub'>{len(jobs)} open job{'s' if len(jobs) != 1 else ''}</p>{table}", "Jobs")
+
+
+def job_page(j, versions, log):
+    """j: job dict; versions: dicts with id, display, printed, amount, needs_review, uploaded, file_id; log: audit dicts."""
+    fields = [("Customer", j["customer"]), ("Vehicle", j["vehicle"]), ("VIN", j["vin"]), ("Insurance", j["insurance"]),
+              ("Claim #", j["claim"]), ("Adjuster", j["adjuster"]), ("Estimator", j["estimator"]),
+              ("Deductible", j["deductible"]), ("Loss date", j["loss_date"])]
+    info = "".join(f"<div><span>{escape(k)}</span>{escape(str(v)) or '&nbsp;'}</div>" for k, v in fields)
+    ro = (f"<form class='ro' method='post' action='/jobs/{j['id']}/ro'><label for='ro'>RO #</label>"
+          f"<input id='ro' name='ro' value='{escape(j['ro'])}' maxlength='20'><button class='small'>Save</button></form>")
+    vrows = "".join(
+        f"<tr><td><a href='/documents/{v['id']}'>{escape(v['display'])}</a>{' (current)' if v['id'] == j['current_id'] else ''}"
+        f"{' <span class=\"chip flag\">Needs review</span>' if v['needs_review'] else ''}</td>"
+        f"<td>{_dt(v['printed'])}</td><td class='n'>{_n(v['amount'], 2, '$')}</td><td>{_dt(v['uploaded'])}</td>"
+        f"<td>{f'<a href=\"/files/{v['file_id']}\">PDF</a>' if v['file_id'] else ''}</td></tr>" for v in versions)
+    lrows = "".join(
+        f"<tr><td>{_dt(a['at'])}</td><td>{escape(a['who'])}</td><td>{escape(a['what'])}</td></tr>" for a in log)
+    body = (f"<p><a href='/jobs'>&larr; All jobs</a></p><h1>{escape(j['customer']) or 'Job'} "
+            f"<span class='sec'>{escape(j['vehicle'])}</span></h1><div class='card'>{ro}</div>"
+            f"<h2>Job</h2><div class='card'><div class='grid'>{info}</div></div>"
+            "<h2>Estimate versions</h2><div class='wrap'><table><thead><tr><th>Document</th><th>Printed</th>"
+            f"<th class='n'>Supplement amount</th><th>Uploaded</th><th></th></tr></thead><tbody>{vrows}</tbody></table></div>"
+            "<h2>Change log</h2><div class='wrap'><table><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead>"
+            f"<tbody>{lrows}</tbody></table></div>")
+    return page(body, f"Job {j['ro'] or j['id']}")
+
+
+def results(r, note=""):
     m = r["summary"]
     d = m["document"]
     fields = [("Customer", m["customer"]), ("RO #", m["ro_number"]), ("Vehicle", m["vehicle"]), ("VIN", m["vin"]),
@@ -96,7 +153,7 @@ def results(r):
         items = "".join(f"<li>{escape(x)}</li>" for x in m["review_reasons"])
         review = f"<div class='review'><strong>Needs review</strong><ul>{items}</ul></div>"
 
-    body = (f"<p><a href='/'>&larr; Parse another</a></p><h1>{escape(d['display'])}</h1>"
+    body = (f"{note or '<p><a href=\"/\">&larr; Upload another</a></p>'}<h1>{escape(d['display'])}</h1>"
             f"<p class='sub'>{escape(r['filename'] or '')}</p>{review}{history}"
             f"<h2>Job</h2><div class='card'><div class='grid'>{info}</div></div>{labor}{parts}{other}")
     return page(body, f"Parsed: {d['display']}")
