@@ -5,7 +5,7 @@ from datetime import datetime
 from . import ccc, mitchell
 from .pdfutil import open_pages, page_text
 
-PARSER_VERSION = "2026.09.23"  # saved with each document; bump when parsing changes so old saves can be re-read
+PARSER_VERSION = "2026.09.23b"  # saved with each document; bump when parsing changes so old saves can be re-read
 PRICED = {"Part", "Other Charge", "Sublet"}
 LABOR_CATEGORIES = ["Body Labor", "Paint Labor", "Mechanical Labor", "Structural Labor",
                     "Frame Labor", "Electrical Labor", "Diagnostic Labor", "Glass Labor"]
@@ -142,7 +142,8 @@ def _checks(fmt, charges, totals, subtotals):
                 exp = round(exp - p["extra"], 2)
             elif p.get("extra") is not None and p.get("extra_kind") == "discount":
                 exp = round(exp + p["extra"], 2)
-            exp = round(exp + by_label.get("Sublet/Miscellaneous", {}).get("amount", 0), 2)
+            # the sublet/misc row is labeled differently between CCC layouts
+            exp = round(exp + sum(by_label.get(k, {}).get("amount", 0) for k in ("Sublet/Miscellaneous", "Miscellaneous")), 2)
         name = "Line price total"
     else:
         exp = None
@@ -205,12 +206,6 @@ def parse_pdf(src, filename=""):
     finally:
         pdf.close()
 
-    rates = {t["label"]: t["rate"] for t in totals if t.get("rate")}
-    for c in charges:
-        if c["hours"] is not None and c.get("rate") is None:
-            c["rate"] = rates.get(c["category"])
-            if c["rate"] is not None:
-                c["amount"] = round(c["hours"] * c["rate"], 2)
     if document["supplement_amount"] is None and history:  # e.g. a $0.00 supplement prints no 'net cost' line
         cur = next((e for e in history["entries"] if re.search(rf"(?<!\d)0*{document['supplement_no']}$", e["label"]) and "upplement" in e["label"]), None)
         if cur and document["supplement_no"]:
@@ -262,8 +257,9 @@ def summarize(r):
         rows = [c for c in charges if c["category"] in cats and c["hours"] is not None]
         hrs = round(sum(c["hours"] for c in rows), 2)
         rate = next((c["rate"] for c in rows if c.get("rate")), None) or next((rates[c] for c in cats if c in rates), None)
-        # only price hours when the estimate prints a rate for that labor type
-        amt = round(sum(c["amount"] for c in rows if c["amount"] is not None), 2) if rate else None
+        # dollars come from the estimate's printed labor totals rows, never hours x rate
+        printed = [t["amount"] for t in totals if t["label"] in cats and t["hours"] is not None and t["amount"] is not None]
+        amt = round(sum(printed), 2) if printed else None
         labor.append({"category": f"{name} labor", "hours": hrs, "rate": rate, "amount": amt})
 
     by = {t["label"]: t["amount"] for t in totals}

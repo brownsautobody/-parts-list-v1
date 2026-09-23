@@ -103,19 +103,49 @@ def save_parse(s, result, pdf_bytes, files_dir, user_id=None):
         title_raw=d["title_raw"], display=d["display"], stage=d["stage"], supplement_no=d["supplement_no"],
         printed_at=d["printed_at"], supplement_amount=d["supplement_amount"], needs_review=bool(result["review"]),
         review_reasons=result["review"], parser_version=PARSER_VERSION, parse=result, created_by=user_id,
-        lines=[EstimateLine(line_no=str(c.get("line") or ""), section=c.get("section") or "", operation=c.get("op") or "",
-                            category=c["category"], description=c.get("desc") or "", part_no=c.get("part_no") or "",
-                            part_type=c.get("part_type") or "", qty=c.get("qty"), hours=c.get("hours"), rate=c.get("rate"),
-                            amount=c.get("amount"), taxed=c.get("taxed"), flags=str(c.get("flags") or ""))
-               for c in result["charges"]],
-        totals=[EstimateTotal(label=t["label"], section=t.get("section") or "", hours=t.get("hours"), rate=t.get("rate"),
-                              amount=t.get("amount"), extra=t.get("extra"), extra_kind=t.get("extra_kind") or "")
-                for t in result["totals"]])
+        lines=_lines(result), totals=_totals(result))
     s.add(doc)
     s.flush()
     audit(s, "estimate_documents", doc.id, "create", new=doc.display, user_id=user_id, job_id=job.id)
+    _set_current(s, job, user_id)
+    return doc, True
+
+
+def reparse_document(s, doc, result, user_id=None):
+    """Replace a saved document's parse with a newer one of the same PDF. Job fields (e.g. a typed RO#) are kept."""
+    job_id, d = doc.job_id, result["document"]
+    old_version = doc.parser_version
+    for field, value in (("display", d["display"]), ("stage", d["stage"]), ("supplement_no", d["supplement_no"]),
+                         ("printed_at", d["printed_at"]), ("supplement_amount", d["supplement_amount"]),
+                         ("needs_review", bool(result["review"])), ("review_reasons", result["review"]),
+                         ("parser_version", PARSER_VERSION)):
+        set_field(s, doc, field, value, user_id, job_id)
+    doc.parse = result
+    doc.lines = _lines(result)
+    doc.totals = _totals(result)
+    audit(s, "estimate_documents", doc.id, "reparse", "parse", old_version, PARSER_VERSION, user_id, job_id)
+    s.flush()
+    _set_current(s, doc.job, user_id)
+    return doc
+
+
+def _lines(result):
+    return [EstimateLine(line_no=str(c.get("line") or ""), section=c.get("section") or "", operation=c.get("op") or "",
+                         category=c["category"], description=c.get("desc") or "", part_no=c.get("part_no") or "",
+                         part_type=c.get("part_type") or "", qty=c.get("qty"), hours=c.get("hours"), rate=c.get("rate"),
+                         amount=c.get("amount"), taxed=c.get("taxed"), flags=str(c.get("flags") or ""))
+            for c in result["charges"]]
+
+
+def _totals(result):
+    return [EstimateTotal(label=t["label"], section=t.get("section") or "", hours=t.get("hours"), rate=t.get("rate"),
+                          amount=t.get("amount"), extra=t.get("extra"), extra_kind=t.get("extra_kind") or "")
+            for t in result["totals"]]
+
+
+def _set_current(s, job, user_id):
+    """Point the job at its newest estimate version."""
     s.refresh(job, ["documents"])
     newest = max(job.documents, key=lambda x: version_key(
         {"supplement_no": x.supplement_no, "stage": x.stage, "printed_at": x.printed_at}))
     set_field(s, job, "current_document_id", newest.id, user_id, job.id)
-    return doc, True
