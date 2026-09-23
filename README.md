@@ -28,15 +28,17 @@ Goal: Build a PDF ingestion tool that can reliably extract estimate data and dis
 
 Scope:
 
-Upload estimate PDF from [estimating software]
-Extract relevant data:
+Upload estimate PDF from CCC ONE or Mitchell (estimates and supplements)
+Extract only what the estimate prints - the parser never calculates or fills in values:
 Customer name and contact info
 Vehicle info (year, make, model, VIN)
-Labor line items (description, hours, rate, total)
-Parts line items (description, quantity, unit price, total)
-Estimate totals (labor, parts, other, grand total)
+Insurance company, claim #, RO # (CCC prints it; Mitchell's is typed in by hand)
+Labor line items (description, operation, labor type, hours) - labor dollars and rates come from the printed labor totals
+Parts line items (description, part #, part type, quantity, price as printed)
+Other charges and sublet (description, amount as printed)
+Estimate totals as printed (labor by type, parts, materials, tax, grand total)
 Display extracted data in a clean table format
-Validate accuracy and identify parsing issues
+Validate accuracy: compare what was read against the estimate's own printed totals and flag "Needs review" when they don't match
 
 Deliverable:
 
