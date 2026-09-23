@@ -3,3 +3,6 @@ samples/*
 !samples/.gitkeep
 __pycache__/
 *.pyc
+
+# Saved database and uploaded PDFs (customer data)
+data/

@@ -5,6 +5,7 @@ from datetime import datetime
 from . import ccc, mitchell
 from .pdfutil import open_pages, page_text
 
+PARSER_VERSION = "2026.09.23"  # saved with each document; bump when parsing changes so old saves can be re-read
 PRICED = {"Part", "Other Charge", "Sublet"}
 LABOR_CATEGORIES = ["Body Labor", "Paint Labor", "Mechanical Labor", "Structural Labor",
                     "Frame Labor", "Electrical Labor", "Diagnostic Labor", "Glass Labor"]
@@ -68,9 +69,9 @@ def document_info(fmt, header, page1_text, all_text):
         title = f"Supplement {hint}" if hint else "Estimate"
         doc = classify_document(title, hint, context="of record" if "of record" in page1_text.lower() else "")
         pt = pm.group(2) if pm else ""
-        if not pt:
-            m = re.search(r"Printed On.*?(\d{1,2}/\d{1,2}/\d{4})", all_text)
-            pt = ""
+        if not pt:  # an original estimate prints 'Estimate Printed <time>' instead
+            m = re.search(r"Estimate Printed (\d{1,2}/\d{1,2}/\d{4} \d\d:\d\d [AP]M)", all_text)
+            pt = m.group(1) if m else ""
         doc["printed_at"] = _parse_dt(pt, ["%m/%d/%Y %I:%M %p"]) if pt else ""
         m = re.search(r"Net Supplement Amount\s+(-?)\$?(-?[\d,]+\.\d\d)", all_text)
     else:
@@ -157,6 +158,28 @@ def _checks(fmt, charges, totals, subtotals):
     return checks
 
 
+def review_flags(r):
+    """Reasons a person should look at this parse; an empty list means it checks out."""
+    reasons = []
+    for c in r["checks"]:
+        if not c["ok"]:
+            reasons.append(f"{c['name']}: parsed {c['parsed']:,.2f}, estimate prints {c['expected']:,.2f}")
+    if not r["checks"]:
+        reasons.append("Couldn't find the estimate's printed totals to check against")
+    h = r["history"]
+    if h and not h["ok"]:
+        if h["total"]:
+            reasons.append(f"Document history adds up to ${h['sum']:,.2f} but the estimate prints ${h['total']['amount']:,.2f}")
+        else:
+            reasons.append("Document history has no printed total to check against")
+    d = r["document"]
+    if d["stage"] == "unknown":
+        reasons.append(f"Couldn't tell what kind of document this is (title: '{d['title_raw']}')")
+    if not d["printed_at"]:
+        reasons.append("Couldn't find the print date")
+    return reasons
+
+
 def parse_pdf(src, filename=""):
     pdf, pages = open_pages(src)
     try:
@@ -204,6 +227,7 @@ def parse_pdf(src, filename=""):
         "filename": filename, "format": fmt, "pages": n_pages, "header": header, "document": document, "history": _history_check(history, totals),
         "charges": charges, "totals": totals, "checks": _checks(fmt, charges, totals, subtotals),
     }
+    result["review"] = review_flags(result)
     result["summary"] = summarize(result)
     return result
 
@@ -283,5 +307,6 @@ def summarize(r):
         "total_labor_amount": round(sum(t["amount"] for t in totals if t["hours"] is not None and t["rate"] and t["label"].endswith("Labor")), 2) or None,
         "parts_total": parts,
         "other_charges": dedup,
-        "checks_ok": all(c["ok"] for c in r["checks"]) if r["checks"] else None,
+        "needs_review": bool(r["review"]),
+        "review_reasons": r["review"],
     }

@@ -1,4 +1,8 @@
-# parts-list-v1
+# Shop Database (shop-database)
+
+Brown's Body Shop's job database: reads CCC ONE / Mitchell estimates, saves every job and estimate version, and
+grows into the production board, customer communication log and parts receiving (see `docs/data-model.md`).
+Originally started as `parts-list-v1`.
 
 ## Project Prompt
 
@@ -64,7 +68,19 @@ Next step: Once parsing is solid, create database schema to match this data stru
 
 Supports **CCC ONE** and **Mitchell** estimate/supplement PDFs (all pages read). Each charge is itemized as
 Part, Body / Paint / Mechanical (and Structural, Frame...) Labor, Sublet or Other Charge. Every parse is checked against
-the estimate's own totals (labor hours by type, parts/charges total).
+the estimate's own totals (labor hours by type, parts/charges total, supplement history). If a check fails or the
+document type / print time can't be read, the page shows a red "Needs review" box listing why.
+
+## Phase 2 status: core database built
+
+Every uploaded estimate is saved. It is matched to its job by RO #, then claim #, then VIN; a supplement becomes a
+new version of the same job and the newest version becomes the job's current estimate. Pages: **Upload estimate**,
+**Jobs** (all open jobs) and a job page (RO # editing, estimate versions with their PDFs, change log). Uploading the
+same PDF twice keeps one copy.
+
+The database is a SQLite file at `data/shop.db` and the PDFs are kept in `data/files/` - both ignored by git so
+customer data stays local. Set `DATABASE_URL` to use PostgreSQL instead, or `SHOP_DATA_DIR` to keep the data
+somewhere else.
 
 ### Run it
 
@@ -78,5 +94,9 @@ Put test PDFs in `samples/` (ignored by git so customer data stays local).
 ### Layout
 
 - `estimate_parser/ccc.py`, `mitchell.py` - one parser per format (header, line items, totals)
-- `estimate_parser/core.py` - format detection, `parse_pdf()`, validation checks (reusable for the database phase)
-- `estimate_parser/render.py`, `app.py` - HTML output and upload page
+- `estimate_parser/core.py` - format detection, `parse_pdf()`, validation checks
+- `estimate_parser/render.py` - HTML pages
+- `db/models.py` - database tables; `db/save.py` - `save_parse()` and change logging; `db/session.py` - connection
+- `app.py` - the web app
+- `docs/data-model.md` - database design for the web app (jobs, estimates, production board, customer
+  communication, parts receiving) and the order to build it in

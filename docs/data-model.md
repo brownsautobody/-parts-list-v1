@@ -1,34 +1,105 @@
-# Data model (on paper, not built yet)
+# Database design
 
-Goal: a job lives on the shop board from first estimate until it is archived, and its numbers change as
-supplements arrive. The parser output already has the shape below; storage comes later.
+**Status:** core tables are built (`db/models.py`). Tables for the later features are still on paper. Until
+Alembic migrations are added (before moving to PostgreSQL), missing tables are created at startup by `init_db()`.
 
-## Job
-One repair order. Identity fields (any may be blank):
-- `ro_number` - shop's 4-digit RO#. CCC prints it; Mitchell does not, so it starts blank and is **edited by hand**
-  during the live-production phase.
-- `claim`, `vin`, `customer`, `vehicle`, `insurance`
-- `status` (production board, later) and `archived_at`
+Goal: one database that holds every job from the first estimate until it is archived, and that the future web app
+(admin page + live production page) can grow on **without rebuilding what already exists**. Features that come later
+(production board, who worked on the car, customer communication, parts receiving) only **add** tables; the core
+tables built first never change shape.
 
-## Document (many per job, never overwritten)
-One uploaded PDF = one version of the estimate.
-- `format` - CCC ONE | Mitchell
-- `title_raw` - exact title printed on the PDF
-- `stage` - preliminary | estimate | to_repair | of_record | unknown
-- `supplement_no` - 0 for the original, N for supplement N
-- `printed_at` - print time from the PDF footer
-- `supplement_amount` - dollar change of this supplement, when the PDF prints it
+## Technology
+- **PostgreSQL** for the live web app (many people and screens at once). SQLite is fine for local testing - the
+  same code runs on both.
+- **SQLAlchemy** models + **Alembic** migrations (Python, like the parser). Every feature arrives as a numbered
+  migration that creates its tables, so existing data is never rebuilt by hand.
+- `estimate_parser/` never talks to the database. A separate `db/` package will have `save_parse(result)` that stores
+  the dict `parse_pdf()` already returns (`estimate_parser/core.py`).
 
-**Current values rule:** the job shows its newest document, chosen by `version_key()` in
-`estimate_parser/core.py`: highest `supplement_no`, then `stage` rank (unknown < preliminary < estimate <
-to_repair < of_record), then `printed_at`. Older documents stay as history (what changed, profitability).
-Both CCC and Mitchell totals are cumulative, so the newest document holds the whole job's totals.
+## Rules every table follows
+1. Every row has `id`, `created_at`, `created_by`, `updated_at`, `updated_by`.
+2. **Nothing important is overwritten or deleted.** A supplement is a new document, a stage move is a new row, a
+   finished job gets `archived_at` instead of being deleted.
+3. **Current state + history.** Live screens read one "current" field (`jobs.current_stage_id`) so they are fast;
+   every change also writes a history row (`job_stage_events`) so the full timeline exists.
+4. **One change log for everything** - `audit_log` (table, row id, field, old value, new value, user, time) is
+   written by the app on every edit. "Who changed the promise date and when?" works for every table, including
+   ones added later.
+5. **Lists the shop may change live are tables, not code:** repair stages, employee roles, labor types, vendors.
+   The admin page edits them.
+6. Money is `numeric(10,2)`; times are timezone-aware timestamps.
+7. Top-level tables carry `shop_id` (one shop today) so a second location never needs a redesign.
+8. Each employee has their own login, so `created_by` / `moved_by` / `received_by` always names a person.
 
-## Document summary (what the page shows today)
-- Labor by type: body, paint, mechanical, other - each with hours, rate, amount; total hours and amount
+## Core tables (built first - saving parsed estimates)
+
+| Table | Holds | Filled from parser |
+|---|---|---|
+| `shops` | shop name, address | - |
+| `users` | employee name, login, role (admin, front office, body tech, painter, parts...), active | - |
+| `customers` | name, phones, email | `header.customer`, phones |
+| `vehicles` | VIN, year, make, model, full description, mileage | `header.vehicle` |
+| `insurance_companies` | name | `header.insurance` |
+| `jobs` | the repair order - see below | `header`, `summary` |
+| `estimate_documents` | one row per uploaded PDF, never overwritten - see below | `document`, `review` |
+| `estimate_lines` | itemized rows: category (Part / Body Labor / Paint Labor / Sublet...), line #, operation, description, part #, part type, qty, hours, rate, amount, taxed | `charges` |
+| `estimate_totals` | printed totals rows: label, hours, rate, amount, markup/discount | `totals` |
+| `files` | any stored file linked to a job: estimate PDF, invoice, photo. File lives on disk / cloud storage; the row keeps path, type, size, uploaded by | uploaded PDF |
+| `audit_log` | every edit (rule 4) | - |
+
+**`jobs`** - `ro_number` (CCC prints it; Mitchell doesn't, so it is **typed in by hand**), customer, vehicle,
+insurance company, `claim_no`, adjuster, estimator, loss date, deductible, `current_document_id`,
+`current_stage_id`, key dates `dropped_off_at`, `promised_at`, `delivered_at`, `archived_at`.
+
+**`estimate_documents`** - job, file, `format` (CCC ONE | Mitchell), `title_raw`, `stage` (preliminary | estimate |
+to_repair | of_record | unknown), `supplement_no` (0 = original), `printed_at`, `supplement_amount`,
+`needs_review` + `review_reasons` (from `review_flags()`), `parser_version`, and the **full parse result as JSON**
+(printed history table included) so old documents can be re-read if the parser improves.
+
+### How a supplement arrives
+1. Upload a PDF -> `parse_pdf()`.
+2. Find the job: RO# first, then claim #, then VIN. None found -> new job.
+3. Add a new `estimate_documents` row with its lines and totals. Nothing older is touched.
+4. `jobs.current_document_id` points at the newest version, chosen by `version_key()` in
+   `estimate_parser/core.py`: highest `supplement_no`, then stage rank (unknown < preliminary < estimate < to_repair
+   < of_record), then `printed_at`. CCC and Mitchell totals are cumulative, so the newest document holds the whole
+   job's numbers; older ones stay as history (what changed, profitability).
+
+## Later features - tables they add
+
+### Live production board
+- `production_stages` - name, display order, color (edited on the admin page): e.g. Waiting on parts, Body,
+  Paint, Reassembly, Detail, QC, Ready.
+- `job_stage_events` - job, from stage, to stage, moved by, moved at, note. Gives "dropped off Monday, in paint
+  Wednesday" and time spent in each stage. Moving a card = new event row + update `jobs.current_stage_id`.
+- `job_assignments` - job, employee, role / labor type, assigned at, removed at. Answers **who worked on the
+  vehicle**, including hand-offs.
+- `time_entries` (optional, later) - employee clocks hours on a job: actual vs estimated hours from
+  `estimate_lines`.
+
+### Customer communication (front office)
+- `communications` - job, customer, channel (call / text / email / in person), inbound or outbound, summary,
+  staff member, time, optional attached file.
+
+### Parts receiving
+- `vendors` - name, phone, account #.
+- `job_parts` - the parts expected on a job, created from the **Part** rows of an estimate document and linked back
+  to that `estimate_lines` row. Status: needed / ordered / received / backordered / returned. A new supplement adds
+  only the parts that are new (matched by part #), so check-ins already done are kept.
+- `part_invoices` (vendor, invoice #, date, total, file) and `part_invoice_lines` (part #, description, qty, price).
+- `part_receipts` - job part, qty received, received by, time, invoice line. Handles partial and split deliveries.
+
+## Build order
+1. Core tables + save each parsed estimate (next step).
+2. Web login + admin page (employees, stages).
+3. Live production page (stage events, assignments).
+4. Communication log.
+5. Parts receiving.
+
+Each step only adds tables; nothing built earlier changes shape.
+
+## What the page shows today (per document)
+- Labor by type: body, paint, mechanical, other - hours, rate, amount; total hours and amount
 - Total parts (pre-tax)
 - Other price breakdowns: materials, taxes, grand total, deductible, net, etc.
-
-## Kept for later
-Itemized charge rows (`charges` in the parser output): part / labor by type / sublet / other, with part numbers,
-hours and rates. Not shown or stored yet.
+- A "Needs review" box when the parse doesn't match the estimate's own totals
