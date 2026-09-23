@@ -1,4 +1,4 @@
-# Shop Database (shop-database)
+# Shop Database (shop-database-v1-app)
 
 Brown's Body Shop's job database: reads CCC ONE / Mitchell estimates, saves every job and estimate version, and
 grows into the production board, customer communication log and parts receiving (see `docs/data-model.md`).
