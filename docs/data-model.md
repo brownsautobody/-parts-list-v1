@@ -67,15 +67,28 @@ to_repair | of_record | unknown), `supplement_no` (0 = original), `printed_at`, 
 
 ## Later features - tables they add
 
-### Live production board
-- `production_stages` - name, display order, color (edited on the admin page): e.g. Waiting on parts, Body,
-  Paint, Reassembly, Detail, QC, Ready.
-- `job_stage_events` - job, from stage, to stage, moved by, moved at, note. Gives "dropped off Monday, in paint
-  Wednesday" and time spent in each stage. Moving a card = new event row + update `jobs.current_stage_id`.
-- `job_assignments` - job, employee, role / labor type, assigned at, removed at. Answers **who worked on the
-  vehicle**, including hand-offs.
+### Live production board (first part built - `db/production.py`, Active jobs page, Settings page)
+- **Built:** `production_stages` - name, display order, active (edited on Settings). Starts with Blueprint,
+  Body Work, Paint, Reassembly, Detail. A job with no stage yet is "Not started".
+- **Built:** `job_stage_events` - job, from stage, to stage, moved by, moved at, note. Gives "dropped off Monday, in
+  paint Wednesday" and time spent in each stage. Moving a job = new event row + update `jobs.current_stage_id`.
+- **Built:** `job_assignments` - job, employee, role (`tech` | `estimator`), assigned at/by, removed at. One current
+  tech and one current estimator per job; a change ends the old row, so hand-offs are kept. Employees are `users`
+  rows (a placeholder login until real logins exist). `jobs.estimator` stays the name *printed on the estimate*.
 - `time_entries` (optional, later) - employee clocks hours on a job: actual vs estimated hours from
   `estimate_lines`.
+
+### Closing a job (planned)
+- Delivered does **not** mean archived. Order: Delivered -> Final bill sent -> All payments received -> Archived.
+- **Yes/No checklist per job**, confirmed by a person (never set by an uploaded PDF, its name or contents):
+  - `checklist_items` - name, display order, active, `required_to_archive`. Edited on Settings, so new items need
+    no code. Starts with *Final bill sent* and *All payments received*.
+  - `job_checks` - job, item, yes/no, set by, set at; every change also in `audit_log`.
+- Payments that arrive after the final bill need their own record (e.g. `payments`: job, payer insurance/customer,
+  amount, date, method, recorded by); the estimate's printed "Received from / Balance due" rows are only what was
+  printed at the time.
+- Archive sets `jobs.archived_at` (logged as `archive`), only when every required checklist item is Yes; an
+  archived-jobs list can un-archive.
 
 ### Customer communication (front office)
 - `communications` - job, customer, channel (call / text / email / in person), inbound or outbound, summary,
@@ -88,11 +101,14 @@ to_repair | of_record | unknown), `supplement_no` (0 = original), `printed_at`, 
   only the parts that are new (matched by part #), so check-ins already done are kept.
 - `part_invoices` (vendor, invoice #, date, total, file) and `part_invoice_lines` (part #, description, qty, price).
 - `part_receipts` - job part, qty received, received by, time, invoice line. Handles partial and split deliveries.
+- The parts department **confirms the part # and price** of each part received (who and when are recorded). The
+  estimate's printed part # and price stay as they are beside it; a mismatch is shown for a person to resolve,
+  never corrected automatically.
 
 ## Build order
-1. Core tables + save each parsed estimate (next step).
-2. Web login + admin page (employees, stages).
-3. Live production page (stage events, assignments).
+1. Core tables + save each parsed estimate (built).
+2. Web login + admin page (employees and stages are on Settings; logins not yet).
+3. Live production page (stage events, assignments - first part built; closing a job next).
 4. Communication log.
 5. Parts receiving.
 

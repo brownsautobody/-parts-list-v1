@@ -1,5 +1,5 @@
 """HTML rendering for parsed estimates and saved jobs."""
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 
 CSS = """
@@ -28,12 +28,21 @@ nav b{margin-right:auto}nav a{color:var(--accent);text-decoration:none}a{color:v
 .flag{background:var(--bad);color:#fff}.note{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 14px}
 form.ro{display:flex;gap:8px;align-items:center}form.ro input{width:90px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
 button.small{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:5px 12px;cursor:pointer}
+button.plain{background:none;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 9px;cursor:pointer}
+form.auto{display:flex;gap:4px;margin:0}select,input.txt{padding:4px 6px;border:1px solid var(--line);border-radius:6px;
+background:var(--bg);color:var(--ink);font:inherit;font-size:14px;max-width:100%}
+table.jobs td{vertical-align:middle}.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+.tabs a{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:3px 12px;text-decoration:none;color:var(--ink)}
+.tabs a span{color:var(--mute);font-size:12px}.tabs a.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.tabs a.on span{color:#fff}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}.off{opacity:.55}
+.prod{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 22px}.prod label{display:block;color:var(--mute);font-size:12px}
 """
 
 JS = """
 document.querySelectorAll('.filters button').forEach(function(b){b.onclick=function(){
  document.querySelectorAll('.filters button').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
  var f=b.dataset.f;document.querySelectorAll('#charges tbody tr').forEach(function(r){r.style.display=(f==='all'||r.dataset.c===f)?'':'none'});};});
+document.querySelectorAll('form.auto select').forEach(function(s){s.onchange=function(){s.form.submit()};});
 """
 
 
@@ -46,7 +55,7 @@ def _n(v, d=2, prefix=""):
     return "" if v is None else f"{prefix}{v:,.{d}f}"
 
 
-NAV = "<nav><b>Shop Database</b><a href='/'>Upload estimate</a><a href='/jobs'>Jobs</a></nav>"
+NAV = "<nav><b>Shop Database</b><a href='/'>Upload estimate</a><a href='/jobs'>Active jobs</a><a href='/settings'>Settings</a></nav>"
 
 
 def page(body, title="Shop Database"):
@@ -66,33 +75,78 @@ def upload_form(error=""):
         "<button class='go' type='submit'>Save estimate</button></form></div>")
 
 
+def _utc(d):
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def _dt(v):
     """ISO text or datetime -> '9/17/2026 1:20 PM'."""
     if not v:
         return ""
     d = v if isinstance(v, datetime) else datetime.fromisoformat(v)
-    if d.tzinfo:
-        d = d.astimezone()
+    if isinstance(v, datetime):  # saved times are UTC (SQLite hands them back without the zone); printed times are text
+        d = _utc(d).astimezone()
     return f"{d.month}/{d.day}/{d.year} {d.strftime('%I:%M %p').lstrip('0')}"
 
 
-def jobs_list(jobs):
-    """jobs: dicts with id, ro, customer, vehicle, insurance, claim, current, needs_review, versions, updated."""
-    rows = "".join(
-        f"<tr><td><a href='/jobs/{j['id']}'>{escape(j['ro']) or '&mdash;'}</a></td><td>{escape(j['customer'])}</td>"
-        f"<td>{escape(j['vehicle'])}</td><td>{escape(j['insurance'])}</td><td>{escape(j['claim'])}</td>"
-        f"<td>{escape(j['current'])}{' <span class=\"chip flag\">Needs review</span>' if j['needs_review'] else ''}</td>"
-        f"<td class='n'>{j['versions']}</td><td class='n'>{_dt(j['updated'])}</td></tr>" for j in jobs)
-    table = ("<div class='wrap'><table><thead><tr><th>RO #</th><th>Customer</th><th>Vehicle</th><th>Insurance</th>"
-             "<th>Claim #</th><th>Current estimate</th><th class='n'>Versions</th><th class='n'>Updated</th></tr></thead>"
-             f"<tbody>{rows}</tbody></table></div>") if jobs else "<p class='sub'>No jobs yet - upload an estimate.</p>"
-    return page(f"<h1>Jobs</h1><p class='sub'>{len(jobs)} open job{'s' if len(jobs) != 1 else ''}</p>{table}", "Jobs")
+def _select(job_id, field, value, options, blank, back):
+    """A dropdown that saves one production field of a job as soon as it changes (button shown without JS)."""
+    opts = f"<option value=''>{escape(blank)}</option>" + "".join(
+        f"<option value='{k}'{' selected' if k == value else ''}>{escape(label)}</option>" for k, label in options)
+    return (f"<form class='auto' method='post' action='/jobs/{job_id}/production'><input type='hidden' name='next' "
+            f"value='{escape(back)}'><select name='{field}' aria-label='{field}'>{opts}</select>"
+            "<noscript><button class='small'>Save</button></noscript></form>")
 
 
-def job_page(j, versions, log):
-    """j: job dict; versions: dicts with id, display, printed, amount, needs_review, uploaded, file_id; log: audit dicts."""
+def production_fields(j, opts, back):
+    """Stage, tech and estimator dropdowns. j: dict with id, stage_id, tech_id, est_id; opts: stages/techs/estimators."""
+    return (_select(j["id"], "stage", j["stage_id"], opts["stages"], "Not started", back),
+            _select(j["id"], "tech", j["tech_id"], opts["techs"], "No tech", back),
+            _select(j["id"], "estimator", j["est_id"], opts["estimators"], "No estimator", back))
+
+
+def _days(since):
+    if not since:
+        return ""
+    d = (datetime.now(timezone.utc) - _utc(since)).days
+    return "today" if d == 0 else f"{d} day{'s' if d != 1 else ''}"
+
+
+def jobs_list(jobs, opts, tabs, back):
+    """Active jobs. jobs: dicts with id, ro, customer, vehicle, insurance, needs_review, stage_id, tech_id,
+    est_id, since; tabs: (label, url, count, on)."""
+    nav = "".join(f"<a class='tab{' on' if on else ''}' href='{url}'>{escape(label)} <span>{n}</span></a>"
+                  for label, url, n, on in tabs)
+    rows = []
+    for j in jobs:
+        stage, tech, est = production_fields(j, opts, back)
+        rows.append(
+            f"<tr><td><a href='/jobs/{j['id']}'>{escape(j['ro']) or '&mdash;'}</a>"
+            f"{' <span class=\"chip flag\">Needs review</span>' if j['needs_review'] else ''}</td><td>{escape(j['customer'])}</td>"
+            f"<td>{escape(j['vehicle'])}</td><td>{escape(j['insurance'])}</td><td>{stage}</td><td>{tech}</td><td>{est}</td>"
+            f"<td class='n'>{_days(j['since'])}</td></tr>")
+    table = ("<div class='wrap'><table class='jobs'><thead><tr><th>RO #</th><th>Customer</th><th>Vehicle</th>"
+             "<th>Insurance</th><th>Stage</th><th>Tech</th><th>Estimator</th><th class='n'>In stage</th>"
+             f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+             ) if jobs else "<p class='sub'>No jobs here.</p>"
+    return page(f"<h1>Active jobs</h1><p class='sub'>Change a job's stage, tech or estimator right in the table - it saves "
+                f"as soon as you pick. Stages and employees are set up on <a href='/settings'>Settings</a>.</p>"
+                f"<div class='tabs'>{nav}</div>{table}", "Active jobs")
+
+
+def job_page(j, versions, log, opts, history):
+    """j: job dict; versions: dicts with id, display, printed, amount, needs_review, uploaded, file_id; log: audit dicts;
+    opts: dropdown choices; history: stage moves (from, to, at, who, days)."""
+    stage, tech, est = production_fields(j, opts, f"/jobs/{j['id']}")
+    prod = (f"<h2>Production</h2><div class='card'><div class='prod'><div><label>Stage</label>{stage}</div>"
+            f"<div><label>Tech</label>{tech}</div><div><label>Estimator</label>{est}</div>"
+            f"<div><label>In this stage</label>{_days(j['since']) or '&mdash;'}</div></div></div>")
+    hrows = "".join(f"<tr><td>{escape(h['from'])} &rarr; {escape(h['to'])}</td><td>{_dt(h['at'])}</td>"
+                    f"<td>{escape(h['who'])}</td><td class='n'>{h['days']}</td></tr>" for h in reversed(history))
+    stage_hist = ("<h2>Stage history</h2><div class='wrap'><table><thead><tr><th>Move</th><th>When</th><th>Who</th>"
+                  f"<th class='n'>Days in previous stage</th></tr></thead><tbody>{hrows}</tbody></table></div>") if history else ""
     fields = [("Customer", j["customer"]), ("Vehicle", j["vehicle"]), ("VIN", j["vin"]), ("Insurance", j["insurance"]),
-              ("Claim #", j["claim"]), ("Adjuster", j["adjuster"]), ("Estimator", j["estimator"]),
+              ("Claim #", j["claim"]), ("Adjuster", j["adjuster"]), ("Estimator on estimate", j["estimator"]),
               ("Deductible", j["deductible"]), ("Loss date", j["loss_date"])]
     info = "".join(f"<div><span>{escape(k)}</span>{escape(str(v)) or '&nbsp;'}</div>" for k, v in fields)
     ro = (f"<form class='ro' method='post' action='/jobs/{j['id']}/ro'><label for='ro'>RO #</label>"
@@ -104,14 +158,59 @@ def job_page(j, versions, log):
         f"<td>{f'<a href=\"/files/{v['file_id']}\">PDF</a>' if v['file_id'] else ''}</td></tr>" for v in versions)
     lrows = "".join(
         f"<tr><td>{_dt(a['at'])}</td><td>{escape(a['who'])}</td><td>{escape(a['what'])}</td></tr>" for a in log)
-    body = (f"<p><a href='/jobs'>&larr; All jobs</a></p><h1>{escape(j['customer']) or 'Job'} "
-            f"<span class='sec'>{escape(j['vehicle'])}</span></h1><div class='card'>{ro}</div>"
+    body = (f"<p><a href='/jobs'>&larr; Active jobs</a></p><h1>{escape(j['customer']) or 'Job'} "
+            f"<span class='sec'>{escape(j['vehicle'])}</span></h1><div class='card'>{ro}</div>{prod}{stage_hist}"
             f"<h2>Job</h2><div class='card'><div class='grid'>{info}</div></div>"
             "<h2>Estimate versions</h2><div class='wrap'><table><thead><tr><th>Document</th><th>Printed</th>"
             f"<th class='n'>Supplement amount</th><th>Uploaded</th><th></th></tr></thead><tbody>{vrows}</tbody></table></div>"
             "<h2>Change log</h2><div class='wrap'><table><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead>"
             f"<tbody>{lrows}</tbody></table></div>")
     return page(body, f"Job {j['ro'] or j['id']}")
+
+
+def _act(url, action, item_id, label, cls="plain"):
+    return (f"<form method='post' action='{url}' class='row'><input type='hidden' name='action' value='{action}'>"
+            f"<input type='hidden' name='id' value='{item_id}'><button class='{cls}'>{label}</button></form>")
+
+
+def settings_page(stages, employees, roles):
+    """stages: dicts id, name, active, jobs (count); employees: dicts id, name, role, active, jobs."""
+    srows = []
+    for i, st in enumerate(stages):
+        u = "/settings/stages"
+        srows.append(
+            f"<tr class='{'' if st['active'] else 'off'}'><td><form method='post' action='{u}' class='row'>"
+            f"<input type='hidden' name='action' value='rename'><input type='hidden' name='id' value='{st['id']}'>"
+            f"<input class='txt' name='name' value='{escape(st['name'])}' maxlength='60' aria-label='Stage name'>"
+            f"<button class='plain'>Rename</button></form></td><td class='n'>{st['jobs']}</td><td><div class='row'>"
+            + (_act(u, "up", st['id'], "&uarr;") if st['active'] and i else "")
+            + (_act(u, "down", st['id'], "&darr;") if st['active'] and i < len(stages) - 1 and stages[i + 1]['active'] else "")
+            + _act(u, "toggle", st['id'], "Hide" if st['active'] else "Show again") + "</div></td></tr>")
+    role_opts = lambda cur: "".join(f"<option{' selected' if r == cur else ''}>{r}</option>" for r in roles)
+    erows = []
+    for e in employees:
+        u = "/settings/employees"
+        erows.append(
+            f"<tr class='{'' if e['active'] else 'off'}'><td><form method='post' action='{u}' class='row'>"
+            f"<input type='hidden' name='action' value='save'><input type='hidden' name='id' value='{e['id']}'>"
+            f"<input class='txt' name='name' value='{escape(e['name'])}' maxlength='120' aria-label='Name'>"
+            f"<select name='role' aria-label='Role'>{role_opts(e['role'])}</select><button class='plain'>Save</button></form></td>"
+            f"<td class='n'>{e['jobs']}</td><td>{_act(u, 'toggle', e['id'], 'Deactivate' if e['active'] else 'Reactivate')}</td></tr>")
+    body = (
+        "<h1>Settings</h1><p class='sub'>Changes are saved to the change log. Hidden stages and inactive employees stay on "
+        "the history of jobs that used them.</p>"
+        "<h2>Production stages</h2><div class='wrap'><table><thead><tr><th>Stage (in board order)</th>"
+        f"<th class='n'>Active jobs</th><th></th></tr></thead><tbody>{''.join(srows)}</tbody></table></div>"
+        "<div class='card' style='margin-top:8px'><form method='post' action='/settings/stages' class='row'>"
+        "<input type='hidden' name='action' value='add'><input class='txt' name='name' placeholder='New stage name' "
+        "maxlength='60' required aria-label='New stage name'><button class='small'>Add stage</button></form></div>"
+        "<h2>Employees</h2><div class='wrap'><table><thead><tr><th>Name and role</th><th class='n'>Active jobs</th><th></th>"
+        f"</tr></thead><tbody>{''.join(erows) or '<tr><td colspan=3>No employees yet.</td></tr>'}</tbody></table></div>"
+        "<div class='card' style='margin-top:8px'><form method='post' action='/settings/employees' class='row'>"
+        "<input type='hidden' name='action' value='add'><input class='txt' name='name' placeholder='Name' maxlength='120' "
+        f"required aria-label='New employee name'><select name='role' aria-label='Role'>{role_opts('tech')}</select>"
+        "<button class='small'>Add employee</button></form></div>")
+    return page(body, "Settings")
 
 
 def results(r, note=""):

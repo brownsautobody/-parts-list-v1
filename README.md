@@ -77,8 +77,17 @@ document type / print time can't be read, the page shows a red "Needs review" bo
 
 Every uploaded estimate is saved. It is matched to its job by RO #, then claim #, then VIN; a supplement becomes a
 new version of the same job and the newest version becomes the job's current estimate. Pages: **Upload estimate**,
-**Jobs** (all open jobs) and a job page (RO # editing, estimate versions with their PDFs, change log). Uploading the
-same PDF twice keeps one copy.
+**Active jobs** (all open jobs, with each job's stage, tech and estimator editable in the table and tabs per
+stage), a job page (RO # editing, production stage and people, stage history, estimate versions with their PDFs,
+change log) and **Settings** (production stages and employees). Uploading the same PDF twice keeps one copy.
+
+To try things without touching the real data, load the sample PDFs into a separate test database:
+
+```
+set SHOP_DATA_DIR=data\test
+python tools/load_samples.py --employees
+python app.py
+```
 
 The database is a SQLite file at `data/shop.db` and the PDFs are kept in `data/files/` - both ignored by git so
 customer data stays local. Set `DATABASE_URL` to use PostgreSQL instead, or `SHOP_DATA_DIR` to keep the data
@@ -98,7 +107,9 @@ Put test PDFs in `samples/` (ignored by git so customer data stays local).
 - `estimate_parser/ccc.py`, `mitchell.py` - one parser per format (header, line items, totals)
 - `estimate_parser/core.py` - format detection, `parse_pdf()`, validation checks
 - `estimate_parser/render.py` - HTML pages
-- `db/models.py` - database tables; `db/save.py` - `save_parse()` and change logging; `db/session.py` - connection
+- `db/models.py` - database tables; `db/save.py` - `save_parse()` and change logging; `db/session.py` - connection;
+  `db/production.py` - stages, stage moves, tech/estimator assignments, employees
+- `tools/load_samples.py` - save every PDF in `samples/` into the database (for a test copy)
 - `app.py` - the web app
 - `docs/data-model.md` - database design for the web app (jobs, estimates, production board, customer
   communication, parts receiving) and the order to build it in

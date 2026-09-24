@@ -165,6 +165,41 @@ class EstimateTotal(Base):
     extra_kind: Mapped[str] = mapped_column(String(20), default="")
 
 
+class ProductionStage(Tracked, Base):
+    """A step on the production board (Blueprint, Body Work, Paint...). Edited on the settings page."""
+    __tablename__ = "production_stages"
+    shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id"))
+    name: Mapped[str] = mapped_column(String(60))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class JobStageEvent(Base):
+    """One move of a job between stages (rule 3: history row; jobs.current_stage_id is the current state)."""
+    __tablename__ = "job_stage_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    from_stage_id: Mapped[int | None] = mapped_column(ForeignKey("production_stages.id"))
+    to_stage_id: Mapped[int | None] = mapped_column(ForeignKey("production_stages.id"))
+    moved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    moved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    note: Mapped[str] = mapped_column(String(300), default="")
+
+
+class JobAssignment(Base):
+    """Who is on a job in a role (tech, estimator). A change ends the old row, so hand-offs stay as history."""
+    __tablename__ = "job_assignments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    role: Mapped[str] = mapped_column(String(40))
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    assigned_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+
+
 class AuditLog(Base):
     """Every change, for every table (rule 4). Append only."""
     __tablename__ = "audit_log"
